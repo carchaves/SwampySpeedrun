@@ -19,6 +19,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -45,7 +46,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -182,6 +186,7 @@ fun RitualDuchaApp(fontFamily: FontFamily, speak: (String) -> Unit, cancelSpeech
     var pickerFor by remember { mutableStateOf<String?>(null) }
     var loaded by remember { mutableStateOf(false) }
     var screen by remember { mutableStateOf("menu") } // "menu" | "edit"
+    var editingItemId by remember { mutableStateOf<String?>(null) }
 
     val current = routines.firstOrNull { it.id == currentId } ?: routines.first()
     val items = current.items
@@ -397,6 +402,9 @@ fun RitualDuchaApp(fontFamily: FontFamily, speak: (String) -> Unit, cancelSpeech
             HeaderBar(fontFamily, routineName, { current.name = it; save() }, voiceEnabled, ::toggleVoice, onBack = { screen = "menu" })
             StatsRow(fontFamily, mmss(totalSeconds()), items.size.toString(), if (started) "${idx + 1}/${items.size}" else "—")
 
+            var dragId by remember { mutableStateOf<String?>(null) }
+            var dragDy by remember { mutableStateOf(0f) }
+            val rowStepPx = with(LocalDensity.current) { 88.dp.toPx() }
             Column(
                 Modifier
                     .weight(1f)
@@ -404,29 +412,40 @@ fun RitualDuchaApp(fontFamily: FontFamily, speak: (String) -> Unit, cancelSpeech
                     .padding(horizontal = 20.dp)
                     .padding(top = 2.dp, bottom = 26.dp)
             ) {
-                for (it in items) {
-                    ActionCard(
+                for (row in items) {
+                    val dragging = dragId == row.id
+                    ActionRow(
                         fontFamily = fontFamily,
-                        item = it,
-                        showPicker = pickerFor == it.id,
-                        onToggleIconPicker = { pickerFor = if (pickerFor == it.id) null else it.id },
-                        onNameChange = { v -> it.name = v; save() },
-                        onMinChange = { m -> it.seconds = maxOf(5, m * 60 + it.seconds % 60); save() },
-                        onSecChange = { s -> it.seconds = maxOf(5, (it.seconds / 60) * 60 + s); save() },
-                        onUp = {
-                            val i = items.indexOf(it); val j = i - 1
-                            if (j >= 0) { val tmp = items[i]; items[i] = items[j]; items[j] = tmp; save() }
+                        item = row,
+                        dragging = dragging,
+                        dragOffset = if (dragging) dragDy else 0f,
+                        onClick = { editingItemId = row.id },
+                        dragModifier = Modifier.pointerInput(row.id) {
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = { dragId = row.id; dragDy = 0f },
+                                onDragEnd = { dragId = null; dragDy = 0f; save() },
+                                onDragCancel = { dragId = null; dragDy = 0f; save() },
+                                onDrag = { change, amount ->
+                                    change.consume()
+                                    dragDy += amount.y
+                                    val i = items.indexOf(row)
+                                    if (i >= 0) {
+                                        if (dragDy > rowStepPx && i < items.size - 1) {
+                                            val t = items[i]; items[i] = items[i + 1]; items[i + 1] = t; dragDy -= rowStepPx
+                                        } else if (dragDy < -rowStepPx && i > 0) {
+                                            val t = items[i]; items[i] = items[i - 1]; items[i - 1] = t; dragDy += rowStepPx
+                                        }
+                                    }
+                                },
+                            )
                         },
-                        onDown = {
-                            val i = items.indexOf(it); val j = i + 1
-                            if (j < items.size) { val tmp = items[i]; items[i] = items[j]; items[j] = tmp; save() }
-                        },
-                        onDelete = { items.remove(it); save() },
                     )
                 }
                 Spacer(Modifier.height(12.dp))
                 AddActionButton(fontFamily) {
-                    items.add(ActionItem("a" + System.currentTimeMillis(), "Nueva acción", 45, "burbujas")); save()
+                    val nid = "a" + System.currentTimeMillis()
+                    items.add(ActionItem(nid, "Nueva acción", 45, "burbujas")); save()
+                    editingItemId = nid
                 }
                 Spacer(Modifier.height(6.dp))
             }
@@ -462,12 +481,14 @@ fun RitualDuchaApp(fontFamily: FontFamily, speak: (String) -> Unit, cancelSpeech
             )
         }
 
-        val active = items.firstOrNull { it.id == pickerFor }
-        if (active != null) {
-            IconPickerDialog(
-                selected = active.icon,
-                onChoose = { id -> active.icon = id; pickerFor = null; save() },
-                onDismiss = { pickerFor = null },
+        val editing = items.firstOrNull { it.id == editingItemId }
+        if (editing != null) {
+            ItemEditDialog(
+                fontFamily = fontFamily,
+                item = editing,
+                onSave = { save() },
+                onDelete = { items.remove(editing); editingItemId = null; save() },
+                onDismiss = { editingItemId = null; save() },
             )
         }
     }
@@ -744,6 +765,154 @@ fun AddActionButton(fontFamily: FontFamily, label: String = "+ Añadir acción",
     ) {
         Text(label, fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Accent)
     }
+}
+
+@Composable
+fun ActionRow(
+    fontFamily: FontFamily,
+    item: ActionItem,
+    dragging: Boolean,
+    dragOffset: Float,
+    onClick: () -> Unit,
+    dragModifier: Modifier,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp)
+            .zIndex(if (dragging) 1f else 0f)
+            .graphicsLayer { translationY = dragOffset }
+            .shadow(if (dragging) 14.dp else 6.dp, RoundedCornerShape(22.dp), spotColor = Color(0x142E9AA8))
+            .clip(RoundedCornerShape(22.dp))
+            .background(CardBg)
+            .border(1.5.dp, Color(0xF2FFFFFF), RoundedCornerShape(22.dp))
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconTile(icon = iconDrawableFor(item.icon), size = 52.dp, bg = Color(0xFFF5FCFD), tint = Accent)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(item.name.ifBlank { "Acción" }, fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = InkStrong, maxLines = 1)
+            Text(mmss(item.seconds.toDouble()), fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Accent, modifier = Modifier.padding(top = 2.dp))
+        }
+        Spacer(Modifier.width(8.dp))
+        Box(
+            dragModifier
+                .size(38.dp, 52.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(Color(0xFFF5FCFD))
+                .border(1.dp, Color(0x33ACD2DA), RoundedCornerShape(11.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("⠿", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = Color(0xFF5A97A3))
+        }
+    }
+}
+
+@Composable
+fun ItemEditDialog(
+    fontFamily: FontFamily,
+    item: ActionItem,
+    onSave: () -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var running by remember { mutableStateOf(false) }
+    var elapsedMs by remember { mutableStateOf(0L) }
+    var startAt by remember { mutableStateOf(0L) }
+    LaunchedEffect(running) {
+        while (running) {
+            elapsedMs = System.currentTimeMillis() - startAt
+            delay(100)
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            Box(Modifier.clip(RoundedCornerShape(12.dp)).clickable { onDismiss() }.padding(horizontal = 14.dp, vertical = 8.dp)) {
+                Text("Listo", fontFamily = fontFamily, fontWeight = FontWeight.Bold, color = Accent, fontSize = 15.sp)
+            }
+        },
+        dismissButton = {
+            Box(Modifier.clip(RoundedCornerShape(12.dp)).clickable { onDelete() }.padding(horizontal = 14.dp, vertical = 8.dp)) {
+                Text("Borrar", fontFamily = fontFamily, fontWeight = FontWeight.Bold, color = DelRed, fontSize = 15.sp)
+            }
+        },
+        title = { Text("Editar acción", fontFamily = fontFamily, fontWeight = FontWeight.Bold, color = InkStrong) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                // Título
+                Text("TÍTULO", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 10.sp, color = Muted2, letterSpacing = 1.2.sp)
+                Box(
+                    Modifier.fillMaxWidth().padding(top = 4.dp)
+                        .clip(RoundedCornerShape(12.dp)).background(Color(0xFFF2FBFC))
+                        .border(1.dp, Color(0x33ACD2DA), RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 10.dp),
+                ) {
+                    BasicTextField(
+                        value = item.name, onValueChange = { item.name = it; onSave() },
+                        textStyle = TextStyle(fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = InkStrong),
+                        singleLine = true, cursorBrush = SolidColor(Accent), modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
+                // Icono
+                Spacer(Modifier.height(14.dp))
+                Text("ICONO", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 10.sp, color = Muted2, letterSpacing = 1.2.sp)
+                Spacer(Modifier.height(6.dp))
+                for (row in ICONS.chunked(5)) {
+                    Row(Modifier.padding(vertical = 3.dp)) {
+                        for (ic in row) {
+                            val sel = ic.id == item.icon
+                            Box(Modifier.padding(3.dp)) {
+                                IconTile(icon = ic.drawable, size = 46.dp,
+                                    bg = if (sel) Accent else Color.White, tint = if (sel) Color.White else Accent,
+                                    onClick = { item.icon = ic.id; onSave() }, border = if (sel) null else Color(0x332E9AA8))
+                            }
+                        }
+                    }
+                }
+
+                // Duración
+                Spacer(Modifier.height(14.dp))
+                Text("DURACIÓN", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 10.sp, color = Muted2, letterSpacing = 1.2.sp)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+                    NumberBox(fontFamily, item.seconds / 60) { m -> item.seconds = maxOf(5, m * 60 + item.seconds % 60); onSave() }
+                    Text(" min", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = AccentDim)
+                    Spacer(Modifier.width(6.dp))
+                    NumberBox(fontFamily, item.seconds % 60) { s -> item.seconds = maxOf(5, (item.seconds / 60) * 60 + s); onSave() }
+                    Text(" seg", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = AccentDim)
+                }
+
+                // Cronómetro
+                Spacer(Modifier.height(16.dp))
+                Text("CRONÓMETRO", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 10.sp, color = Muted2, letterSpacing = 1.2.sp)
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(14.dp))
+                            .background(if (running) Brush.verticalGradient(listOf(Color(0xFFE28E9E), Color(0xFFC75C72)))
+                                else Brush.verticalGradient(listOf(Color(0xFF37B0BF), Color(0xFF1F7F8D))))
+                            .clickable {
+                                if (!running) { elapsedMs = 0L; startAt = System.currentTimeMillis(); running = true }
+                                else {
+                                    running = false
+                                    item.seconds = maxOf(5, Math.round(elapsedMs / 1000.0).toInt())
+                                    onSave()
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(if (running) "■ Detener y usar" else "⏱ Cronometrar",
+                            fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Text(mmss(elapsedMs / 1000.0), fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = Accent)
+                }
+            }
+        },
+    )
 }
 
 @Composable
