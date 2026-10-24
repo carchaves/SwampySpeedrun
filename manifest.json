@@ -1,0 +1,11 @@
+{
+  "name": "Ritual de Ducha",
+  "short_name": "Ritual de Ducha",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#dcf0f5",
+  "theme_color": "#2e9aa8",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

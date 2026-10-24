@@ -1,0 +1,2 @@
+rootProject.name = "RitualDucha"
+include(":app")
