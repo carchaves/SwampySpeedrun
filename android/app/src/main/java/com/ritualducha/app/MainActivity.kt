@@ -181,6 +181,7 @@ fun RitualDuchaApp(fontFamily: FontFamily, speak: (String) -> Unit, cancelSpeech
     var remainMs by remember { mutableStateOf(0L) }
     var pickerFor by remember { mutableStateOf<String?>(null) }
     var loaded by remember { mutableStateOf(false) }
+    var screen by remember { mutableStateOf("menu") } // "menu" | "edit"
 
     val current = routines.firstOrNull { it.id == currentId } ?: routines.first()
     val items = current.items
@@ -336,6 +337,18 @@ fun RitualDuchaApp(fontFamily: FontFamily, speak: (String) -> Unit, cancelSpeech
         }
         save()
     }
+    // Abrir la vista de edición de una rutina desde el menú.
+    fun openRoutine(id: String) {
+        if (id != currentId) selectRoutine(id)
+        screen = "edit"
+    }
+    // Arrancar una rutina directo desde el menú (play a la izquierda).
+    fun playRoutine(id: String) {
+        if (id != currentId) { currentId = id; save() }
+        cancelSpeech()
+        started = false; playing = false; finished = false; idx = 0; remainMs = 0; pickerFor = null
+        if (curItems().isNotEmpty()) startAction(0)
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -368,16 +381,20 @@ fun RitualDuchaApp(fontFamily: FontFamily, speak: (String) -> Unit, cancelSpeech
     Box(Modifier.fillMaxSize().background(bgGradient)) {
         BubbleField(Modifier.fillMaxSize())
 
-        Column(Modifier.fillMaxSize()) {
-            HeaderBar(fontFamily, routineName, { current.name = it; save() }, voiceEnabled, ::toggleVoice)
-            RoutinesBar(
+        if (screen == "menu") {
+            MenuScreen(
                 fontFamily = fontFamily,
                 routines = routines,
-                currentId = currentId,
-                onSelect = ::selectRoutine,
-                onAdd = ::addRoutine,
+                voiceEnabled = voiceEnabled,
+                onToggleVoice = ::toggleVoice,
+                onOpen = ::openRoutine,
+                onPlay = ::playRoutine,
+                onAdd = { addRoutine(); screen = "edit" },
                 onDelete = ::deleteRoutine,
             )
+        } else {
+        Column(Modifier.fillMaxSize()) {
+            HeaderBar(fontFamily, routineName, { current.name = it; save() }, voiceEnabled, ::toggleVoice, onBack = { screen = "menu" })
             StatsRow(fontFamily, mmss(totalSeconds()), items.size.toString(), if (started) "${idx + 1}/${items.size}" else "—")
 
             Column(
@@ -425,6 +442,7 @@ fun RitualDuchaApp(fontFamily: FontFamily, speak: (String) -> Unit, cancelSpeech
                 onSkip = ::onSkip,
             )
         }
+        }
 
         if (started) {
             PlayerOverlay(
@@ -456,16 +474,25 @@ fun RitualDuchaApp(fontFamily: FontFamily, speak: (String) -> Unit, cancelSpeech
 }
 
 @Composable
-fun HeaderBar(fontFamily: FontFamily, name: String, onNameChange: (String) -> Unit, voiceEnabled: Boolean, onToggleVoice: () -> Unit) {
+fun HeaderBar(fontFamily: FontFamily, name: String, onNameChange: (String) -> Unit, voiceEnabled: Boolean, onToggleVoice: () -> Unit, onBack: (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(Color.White),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(painterResource(R.drawable.ic_ducha), null, tint = Accent, modifier = Modifier.size(22.dp))
+        if (onBack != null) {
+            Box(
+                Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(Color.White).clickable(onClick = onBack),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("‹", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = Accent)
+            }
+        } else {
+            Box(
+                Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(Color.White),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(painterResource(R.drawable.ic_ducha), null, tint = Accent, modifier = Modifier.size(22.dp))
+            }
         }
         Spacer(Modifier.width(10.dp))
         BasicTextField(
@@ -483,59 +510,76 @@ fun HeaderBar(fontFamily: FontFamily, name: String, onNameChange: (String) -> Un
 }
 
 @Composable
-fun RoutinesBar(
+fun MenuScreen(
     fontFamily: FontFamily,
     routines: List<Routine>,
-    currentId: String,
-    onSelect: (String) -> Unit,
+    voiceEnabled: Boolean,
+    onToggleVoice: () -> Unit,
+    onOpen: (String) -> Unit,
+    onPlay: (String) -> Unit,
     onAdd: () -> Unit,
     onDelete: (String) -> Unit,
 ) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(start = 20.dp, end = 20.dp, bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        for (r in routines) {
-            val selected = r.id == currentId
-            Row(
-                Modifier
-                    .padding(end = 8.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(if (selected) Accent else Color(0xCCFFFFFF))
-                    .then(if (selected) Modifier else Modifier.border(1.dp, Color(0x332E9AA8), RoundedCornerShape(14.dp)))
-                    .clickable { onSelect(r.id) }
-                    .padding(horizontal = 14.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    r.name.ifBlank { "Rutina" },
-                    fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp,
-                    color = if (selected) Color.White else Accent,
-                )
-                if (selected && routines.size > 1) {
-                    Spacer(Modifier.width(8.dp))
+    Column(Modifier.fillMaxSize()) {
+        // Barra superior
+        Row(
+            Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(Color.White),
+                contentAlignment = Alignment.Center,
+            ) { Icon(painterResource(R.drawable.ic_ducha), null, tint = Accent, modifier = Modifier.size(22.dp)) }
+            Spacer(Modifier.width(10.dp))
+            Text("Aseo Speedrun", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = InkStrong, modifier = Modifier.weight(1f))
+            IconTile(icon = if (voiceEnabled) R.drawable.ic_speaker_on else R.drawable.ic_speaker_off, size = 44.dp,
+                bg = if (voiceEnabled) Accent else Color.White, tint = if (voiceEnabled) Color.White else AccentDim, onClick = onToggleVoice)
+        }
+        Text("TUS RUTINAS", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Muted2,
+            letterSpacing = 1.6.sp, modifier = Modifier.padding(start = 22.dp, top = 6.dp, bottom = 2.dp))
+
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(top = 6.dp, bottom = 26.dp)
+        ) {
+            for (r in routines) {
+                val count = r.items.size
+                val total = mmss(r.items.sumOf { it.seconds }.toDouble())
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp)
+                        .shadow(6.dp, RoundedCornerShape(22.dp), spotColor = Color(0x142E9AA8))
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(CardBg)
+                        .border(1.5.dp, Color(0xF2FFFFFF), RoundedCornerShape(22.dp))
+                        .clickable { onOpen(r.id) }
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Box(
-                        Modifier.size(18.dp).clip(CircleShape).background(Color(0x33FFFFFF)).clickable { onDelete(r.id) },
+                        Modifier.size(52.dp).clip(CircleShape)
+                            .background(Brush.verticalGradient(listOf(Color(0xFF37B0BF), Color(0xFF1F7F8D))))
+                            .clickable { onPlay(r.id) },
                         contentAlignment = Alignment.Center,
-                    ) {
-                        Text("✕", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 10.sp, color = Color.White)
+                    ) { Text("▶", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = Color.White) }
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(r.name.ifBlank { "Rutina" }, fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = InkStrong, maxLines = 1)
+                        Text("$count pasos · $total", fontFamily = fontFamily, fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Muted, modifier = Modifier.padding(top = 2.dp))
+                    }
+                    if (routines.size > 1) {
+                        Spacer(Modifier.width(8.dp))
+                        Box(
+                            Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(Color.White)
+                                .border(1.dp, Color(0x4DE28E9E), RoundedCornerShape(11.dp)).clickable { onDelete(r.id) },
+                            contentAlignment = Alignment.Center,
+                        ) { Text("✕", fontFamily = fontFamily, fontWeight = FontWeight.Bold, color = DelRed) }
                     }
                 }
             }
-        }
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color(0x8CFFFFFF))
-                .border(1.5.dp, Accent.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
-                .clickable { onAdd() }
-                .padding(horizontal = 14.dp, vertical = 9.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("+ Rutina", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Accent)
+            Spacer(Modifier.height(14.dp))
+            AddActionButton(fontFamily, "+ Nueva rutina", onAdd)
+            Spacer(Modifier.height(6.dp))
         }
     }
 }
@@ -687,7 +731,7 @@ fun SmallArrowButton(fontFamily: FontFamily, symbol: String, onClick: () -> Unit
 }
 
 @Composable
-fun AddActionButton(fontFamily: FontFamily, onClick: () -> Unit) {
+fun AddActionButton(fontFamily: FontFamily, label: String = "+ Añadir acción", onClick: () -> Unit) {
     Box(
         Modifier
             .fillMaxWidth()
@@ -698,7 +742,7 @@ fun AddActionButton(fontFamily: FontFamily, onClick: () -> Unit) {
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text("+ Añadir acción", fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Accent)
+        Text(label, fontFamily = fontFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Accent)
     }
 }
 
